@@ -1,36 +1,155 @@
-# 04. Modern Java Features (Java 8 to 21 LTS)
+# 04. Modern Java Features, Functional Interfaces, Comparable vs. Comparator (Java 8 to 21 LTS)
 
 > **Navigation**: [Master Index](README.md) | [Previous: Collections & Generics](03_Collections_Framework_Generics.md) | [Next: Java I/O & NIO](05_Java_IO_NIO_Netty.md)
 
 ---
 
 ## 📌 Chapter Overview
-This module covers the modern language features introduced between **Java 8 and Java 21 LTS**, including functional programming with Streams, Records, Sealed Classes, Pattern Matching, and Switch Expressions.
+This module covers the modern language features introduced between **Java 8 and Java 21 LTS**, including the complete **Master Encyclopedia of Functional Interfaces (`java.util.function`)**, **`Comparable` vs. `Comparator`**, Stream API, Records, Sealed Classes, and Pattern Matching.
 
 ---
 
-## 1. Java 8 Functional Interfaces & Stream API
+## 1. `Comparable<T>` vs. `Comparator<T>` Deep Dive
 
-### Q1. Explain the 4 Core Functional Interfaces in `java.util.function`.
+```
++-----------------------------------------------------------------------------------+
+|                        COMPARABLE VS. COMPARATOR COMPARISON                       |
++-----------------------------------------------------------------------------------+
+|  Feature              | Comparable<T>                     | Comparator<T>         |
+|  -------------------- | --------------------------------- | --------------------- |
+|  **Package**          | `java.lang`                       | `java.util`           |
+|  **Method**           | `int compareTo(T o)`              | `int compare(T a, T b)`|
+|  **Sorting Nature**   | **Natural / Default Ordering**    | **Custom Sorting Strategies** |
+|  **Class Modification**| **Modifies original class**      | **External to class** |
+|  **Number of Criteria**| Single default logic             | Multiple flexible criteria |
++-----------------------------------------------------------------------------------+
+```
+
+### Q1. Code Example: `Comparable` vs. `Comparator` with Fluent Chaining.
 **Answer:**
 
-| Interface | Method Signature | Purpose | Example |
+```java
+// 1. Comparable: Defines Natural Sorting by ID (Modifies the class)
+public class Employee implements Comparable<Employee> {
+    private Long id;
+    private String department;
+    private double salary;
+    private String name;
+
+    public Employee(Long id, String name, String dept, double salary) {
+        this.id = id; this.name = name; this.department = dept; this.salary = salary;
+    }
+
+    @Override
+    public int compareTo(Employee other) {
+        return Long.compare(this.id, other.id); // Natural order by ID
+    }
+
+    // Getters...
+    public Long getId() { return id; }
+    public String getName() { return name; }
+    public String getDepartment() { return department; }
+    public double getSalary() { return salary; }
+}
+
+// 2. Comparator: External Custom Multi-Criteria Sorting Pipeline
+public class EmployeeComparators {
+
+    // Sort by Department ASC -> then Salary DESC -> then Name ASC (Nulls Last)
+    public static final Comparator<Employee> MULTI_CRITERIA_SORT = Comparator
+        .comparing(Employee::getDepartment)
+        .thenComparing(Comparator.comparingDouble(Employee::getSalary).reversed())
+        .thenComparing(Employee::getName, Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER));
+}
+
+// Usage in Collections:
+List<Employee> list = getEmployees();
+Collections.sort(list); // Uses Comparable (by ID)
+list.sort(EmployeeComparators.MULTI_CRITERIA_SORT); // Uses custom Comparator!
+```
+
+---
+
+## 2. Master Encyclopedia of Functional Interfaces (`java.util.function`)
+
+```
++-----------------------------------------------------------------------------------+
+|                   THE 4 CORE FUNCTIONAL INTERFACE ARCHETYPES                      |
++-----------------------------------------------------------------------------------+
+| 1. Predicate<T>        : (T)  -> boolean       [Condition / Filter evaluation]     |
+| 2. Function<T, R>      : (T)  -> R             [Data Transformation / Mapping]    |
+| 3. Consumer<T>         : (T)  -> void          [Action / Side-effect execution]   |
+| 4. Supplier<T>         : ()   -> T             [Lazy Factory / Value Generation]  |
++-----------------------------------------------------------------------------------+
+```
+
+### Q2. Detail the 4 Core Archetypes, 2-Arity Variants, and Operators with Code.
+**Answer:**
+
+#### 1. The 4 Core Functional Interfaces:
+```java
+// 1. Predicate<T> -> Evaluates boolean condition
+Predicate<String> isEmail = s -> s != null && s.contains("@");
+Predicate<String> isLong = s -> s.length() > 5;
+Predicate<String> validEmail = isEmail.and(isLong); // Chaining with and/or/negate
+
+// 2. Function<T, R> -> Transforms T into R
+Function<String, Integer> stringLength = String::length;
+Function<Integer, Integer> square = x -> x * x;
+Function<String, Integer> lengthSquared = stringLength.andThen(square); // Chaining
+
+// 3. Consumer<T> -> Consumes T, returns void (side-effect)
+Consumer<String> logger = msg -> log.info("AUDIT: {}", msg);
+Consumer<String> emailer = msg -> emailService.send(msg);
+Consumer<String> auditPipeline = logger.andThen(emailer); // Chaining
+
+// 4. Supplier<T> -> Takes no input, supplies a new T (Lazy creation)
+Supplier<Double> randomScore = Math::random;
+Supplier<String> traceIdSupplier = () -> UUID.randomUUID().toString();
+```
+
+---
+
+#### 2. Two-Arity Variants (Two Inputs):
+| Interface | Signature | Core Purpose | Example |
 | :--- | :--- | :--- | :--- |
-| **`Predicate<T>`** | `boolean test(T t)` | Evaluates a condition | `x -> x > 0` |
-| **`Function<T, R>`**| `R apply(T t)` | Transforms input `T` to output `R` | `User::getEmail` |
-| **`Consumer<T>`** | `void accept(T t)` | Consumes input, produces side-effect | `System.out::println` |
-| **`Supplier<T>`** | `T get()` | Generates/supplies a value | `() -> UUID.randomUUID()` |
+| **`BiPredicate<T, U>`** | `boolean test(T t, U u)` | Evaluates condition on 2 inputs | `(user, role) -> user.hasRole(role)` |
+| **`BiFunction<T, U, R>`**| `R apply(T t, U u)` | Transforms 2 inputs into 1 output | `(salary, bonus) -> salary + bonus` |
+| **`BiConsumer<T, U>`** | `void accept(T t, U u)` | Consumes 2 inputs (e.g. Map iteration)| `(k, v) -> System.out.println(k + "=" + v)` |
 
 ---
 
-### Q2. Stream API Deep Dive: Intermediate vs. Terminal Operations & Parallel Streams.
+#### 3. Operator Variants (Input Type Matches Output Type):
+```java
+// 1. UnaryOperator<T> (Specialization of Function<T, T>)
+UnaryOperator<String> sanitize = s -> s.trim().toLowerCase();
+
+// 2. BinaryOperator<T> (Specialization of BiFunction<T, T, T>)
+BinaryOperator<BigDecimal> addPrices = BigDecimal::add;
+BinaryOperator<Integer> maxOp = BinaryOperator.maxBy(Integer::compareTo);
+```
+
+---
+
+#### 4. Primitive Specializations (High-Performance Zero-Boxing):
+Autoboxing primitive types (`int` $\rightarrow$ `Integer`) inside tight loops generates huge garbage collection overhead. Java provides primitive specializations to eliminate wrapper object creation:
+
+| Primitive Interface | Input | Output | Memory Advantage |
+| :--- | :--- | :--- | :--- |
+| **`IntPredicate`** | `int` | `boolean` | Zero boxing (`int -> boolean`) |
+| **`LongConsumer`** | `long` | `void` | Zero boxing |
+| **`DoubleFunction<R>`**| `double`| `R` | Prevents boxing `double` input |
+| **`ToIntFunction<T>`** | `T` | `int` | Prevents boxing return value |
+| **`IntToLongFunction`**| `int` | `long` | 100% Primitive pipeline ($O(1)$ RAM) |
+
+---
+
+## 3. Stream API Deep Dive: Intermediate vs. Terminal Operations
+
+### Q3. `map()` vs. `flatMap()` & Parallel Stream Hazards.
 **Answer:**
 
-#### 1. Intermediate vs. Terminal Operations:
-- **Intermediate Operations (Lazy)**: Return a new `Stream`. Execution is deferred until a terminal operation is called (`filter()`, `map()`, `flatMap()`, `distinct()`, `sorted()`).
-- **Terminal Operations (Eager)**: Triggers execution, consumes stream pipeline, and returns a concrete result or side-effect (`collect()`, `forEach()`, `reduce()`, `count()`, `findFirst()`).
-
-#### 2. `map()` vs. `flatMap()`:
+#### 1. `map()` vs. `flatMap()`:
 - `map(Function<T, R>)`: One-to-one transformation ($T \rightarrow R$).
 - `flatMap(Function<T, Stream<R>>)`: One-to-many flattening transformation ($T \rightarrow \text{Stream}<R> \rightarrow \text{Flattened Stream}$).
 
@@ -41,7 +160,7 @@ List<String> flat = nested.stream()
                           .toList(); // ["A", "B", "C", "D"]
 ```
 
-#### 3. Parallel Stream Hazards:
+#### 2. Parallel Stream Hazards:
 `stream.parallel()` utilizes the shared, JVM-wide **`ForkJoinPool.commonPool()`** (sized to `Runtime.getRuntime().availableProcessors() - 1`).
 
 > [!WARNING]
@@ -49,30 +168,10 @@ List<String> flat = nested.stream()
 
 ---
 
-## 2. Java 9 to 11 Features
+## 4. Java 14 to 17 Features: Records & Sealed Classes
 
-### Q3. `List.of()` vs. `Collections.unmodifiableList()`.
+### Q4. Explain Records (Java 16) and Compact Constructors.
 **Answer:**
-- `Collections.unmodifiableList(list)`: Returns an unmodifiable **wrapper view** over the underlying list. If the original list is modified by another reference, the view reflects the changes.
-- `List.of(...)` (Java 9+): Creates a true **100% Immutable and Compact** list instance backed by internal array fields. Rejects `null` elements immediately with `NullPointerException`.
-
----
-
-### Q4. Local-Variable Type Inference (`var` - Java 10).
-**Answer:**
-`var` allows the compiler to infer static types at compile-time:
-- **Valid**: Local variables with immediate initializers (`var list = new ArrayList<String>();`).
-- **Invalid**: Method parameters, return types, class instance fields, or uninitialized variables (`var x;`).
-
----
-
-## 3. Java 14 to 17 Features: Records & Sealed Classes
-
-### Q5. Explain Records (Java 16) and Custom Constructors.
-**Answer:**
-A **Record** is a concise, immutable data carrier class. The compiler automatically generates:
-- `private final` fields for all record components.
-- Canonical constructor, accessors (`user.email()`), `equals()`, `hashCode()`, and `toString()`.
 
 ```java
 public record UserDto(Long id, String username, String email) {
@@ -86,9 +185,8 @@ public record UserDto(Long id, String username, String email) {
 
 ---
 
-### Q6. Explain Sealed Classes & Interfaces (Java 17 LTS).
+### Q5. Explain Sealed Classes & Interfaces (Java 17 LTS).
 **Answer:**
-**Sealed Classes (`sealed`, `permits`)** restrict which classes or interfaces may extend or implement them, enabling domain modeling with closed hierarchies:
 
 ```java
 // Top-level sealed interface
@@ -101,21 +199,17 @@ public sealed interface PaymentStatus
 }
 ```
 
-Direct subclasses must be declared as either `final`, `sealed`, or `non-sealed` (open for unrestricted extension).
-
 ---
 
-## 4. Java 21 LTS: Pattern Matching & Switch Enhancements
+## 5. Java 21 LTS: Pattern Matching & Switch Enhancements
 
-### Q7. Pattern Matching for `switch` and Record Patterns (Deconstruction).
+### Q6. Pattern Matching for `switch` and Record Patterns (Deconstruction).
 **Answer:**
-Java 21 introduces **Record Deconstruction** and **Pattern Matching for `switch` (JEP 440 & 441)**:
 
 ```java
 public class PaymentNotificationService {
 
     public String formatNotification(PaymentStatus status) {
-        // Switch pattern matching with exhaustive sealed hierarchy checking (No default needed!)
         return switch (status) {
             // Record Pattern Deconstruction directly in case label!
             case PaymentStatus.Success(var txId, var time) -> 
@@ -137,11 +231,4 @@ public class PaymentNotificationService {
 
 ---
 
-### Q8. What is the Foreign Function & Memory API (Project Panama - Java 22 / 21 Preview)?
-**Answer:**
-Project Panama allows Java applications to safely interoperate with native code (C/C++ libraries) and off-heap memory outside the JVM, replacing the dangerous, slow, and error-prone **Java Native Interface (JNI)** with modern, safe, type-checked Java abstractions (`Arena`, `MemorySegment`, `Linker`).
-
----
-
 > **Next Chapter**: [05 Java I/O, NIO & Netty Architecture](05_Java_IO_NIO_Netty.md)
-

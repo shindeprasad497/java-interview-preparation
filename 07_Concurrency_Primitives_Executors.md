@@ -1,15 +1,104 @@
-# 07. Concurrency Primitives, Thread Pools & CompletableFuture
+# 07. Concurrency Primitives, Thread Pools, Callable vs. Runnable & CompletableFuture
 
 > **Navigation**: [Master Index](README.md) | [Previous: Multithreading & JMM](06_Multithreading_JMM_Concurrency.md) | [Next: Virtual Threads (Loom)](08_Virtual_Threads_Loom.md)
 
 ---
 
 ## 📌 Chapter Overview
-This module explores enterprise thread coordination primitives (`CountDownLatch`, `CyclicBarrier`, `Semaphore`, `Phaser`), deep internal tuning of `ThreadPoolExecutor`, rejection policies, and asynchronous composition with `CompletableFuture`.
+This module explores enterprise thread coordination primitives (`CountDownLatch`, `CyclicBarrier`, `Semaphore`, `Phaser`), **`Runnable` vs. `Callable`**, **`Future` vs. `CompletableFuture`**, deep internal tuning of `ThreadPoolExecutor`, rejection policies, and asynchronous composition pipelines.
 
 ---
 
-## 1. Concurrency Coordination Primitives Comparison
+## 1. `Runnable` vs. `Callable` vs. `Future` vs. `CompletableFuture`
+
+```
++-----------------------------------------------------------------------------------+
+|                        CONCURRENCY ASYNC CONTRACT COMPARISON                      |
++-----------------------------------------------------------------------------------+
+|  Contract / Type      | Return Value? | Throws Checked Exception? | Non-Blocking? |
+|  -------------------- | :-----------: | :-----------------------: | :-----------: |
+|  **`Runnable`**       | **No** (void) | No                        | N/A           |
+|  **`Callable<V>`**    | **Yes** (`V`) | **Yes** (`throws Exception`)| N/A         |
+|  **`Future<V>`**      | **Yes** (`V`) | **Yes** (`ExecutionEx`)   | **No** (Blocks)|
+|  **`CompletableFuture`| **Yes** (`T`) | Handled via callbacks     | **Yes (100%)** |
++-----------------------------------------------------------------------------------+
+```
+
+### Q1. Compare `Runnable` vs. `Callable` and `Future` vs. `CompletableFuture`.
+**Answer:**
+
+#### 1. `Runnable` vs. `Callable<V>`:
+- **`Runnable` (`java.lang`)**: Single abstract method `public void run()`. Cannot return a computation result and cannot throw checked exceptions.
+- **`Callable<V>` (`java.util.concurrent`)**: Single abstract method `public V call() throws Exception`. Returns a generic result `V` and can throw checked exceptions directly to the executor.
+
+#### 2. Why `Future<V>` is Insufficient (The 5 Limitations):
+1. **Blocking `.get()`**: Retrieving the result forces the calling thread to block until the task completes.
+2. **Cannot Chain Asynchronous Stages**: You cannot trigger a callback when the Future finishes without polling or blocking.
+3. **Cannot Combine Multiple Futures**: Combining results from 5 parallel tasks requires blocking `.get()` sequentially on each.
+4. **Cannot Manually Complete**: Cannot complete the future externally from a webhook or network response.
+5. **No Built-in Exception Handling**: No fallback recovery mechanism (`exceptionally` or `handle`).
+
+---
+
+## 2. Asynchronous Pipelines with `CompletableFuture`
+
+```
++-----------------------------------------------------------------------------------+
+|                        COMPLETABLEFUTURE METHOD TAXONOMY                          |
++-----------------------------------------------------------------------------------+
+| 1. Creation:     supplyAsync(Supplier<U>), runAsync(Runnable)                     |
+| 2. Chaining:     thenApply(T -> R), thenAccept(T -> void), thenRun(() -> void)    |
+| 3. Composition:  thenCompose(T -> CompletableFuture<U>) (Monadic FlatMap)        |
+| 4. Combination:  thenCombine(CF<U>, BiFunction<T, U, V>) (Parallel Join)          |
+| 5. Multi-Join:   CompletableFuture.allOf(cf1, cf2...), anyOf(cf1, cf2...)         |
+| 6. Recovery:     exceptionally(ex -> fallback), handle((res, ex) -> ...)          |
++-----------------------------------------------------------------------------------+
+```
+
+### Q2. How do you compose asynchronous pipelines using `CompletableFuture`?
+**Answer:**
+
+```java
+@Service
+public class OrderAggregationService {
+    
+    private final ExecutorService customPool = Executors.newFixedThreadPool(16);
+
+    public CompletableFuture<OrderSummary> aggregateOrderAsync(Long orderId) {
+        // Step 1: SupplyAsync - Fetch Order asynchronously
+        CompletableFuture<Order> orderFuture = CompletableFuture.supplyAsync(
+            () -> orderClient.getOrder(orderId), customPool
+        );
+
+        // Step 2: thenCompose (FlatMap) - Fetch Payment using Order's paymentId (Dependent Async Task)
+        CompletableFuture<Payment> paymentFuture = orderFuture.thenCompose(
+            order -> CompletableFuture.supplyAsync(() -> paymentClient.getPayment(order.paymentId()), customPool)
+        );
+
+        // Step 3: Fetch User Profile in Parallel
+        CompletableFuture<User> userFuture = orderFuture.thenCompose(
+            order -> CompletableFuture.supplyAsync(() -> userClient.getUser(order.userId()), customPool)
+        );
+
+        // Step 4: allOf - Wait for all futures to complete in parallel without blocking!
+        return CompletableFuture.allOf(orderFuture, paymentFuture, userFuture)
+            .thenApply(v -> new OrderSummary(
+                orderFuture.join(),   // Non-blocking here because allOf() already guaranteed completion!
+                paymentFuture.join(),
+                userFuture.join()
+            ))
+            // Step 5: exceptionally - Fallback recovery on downstream failure
+            .exceptionally(ex -> {
+                log.error("Order aggregation failed for ID: {}", orderId, ex);
+                return OrderSummary.emptyFallback(orderId);
+            });
+    }
+}
+```
+
+---
+
+## 3. Concurrency Coordination Primitives Comparison
 
 | Primitive | Reusable? | Counter Direction | Core Purpose | Typical Production Use Case |
 | :--- | :--- | :--- | :--- | :--- |
@@ -20,7 +109,7 @@ This module explores enterprise thread coordination primitives (`CountDownLatch`
 
 ---
 
-### Q1. Code Deep Dive: `CountDownLatch` vs. `Semaphore` in Action.
+### Q3. Code Deep Dive: `CountDownLatch` vs. `Semaphore` in Action.
 **Answer:**
 
 ```java
@@ -59,7 +148,7 @@ public class ConcurrencyCoordinationExamples {
 
 ---
 
-## 2. `ThreadPoolExecutor` Internals & Sizing Architecture
+## 4. `ThreadPoolExecutor` Internals & Sizing Architecture
 
 ```
                                    [ Incoming Task ]
@@ -80,7 +169,7 @@ public class ConcurrencyCoordinationExamples {
                                                            [ Create New Worker ]  [ Trigger REJECTION POLICY ]
 ```
 
-### Q2. Deep Dive: `ThreadPoolExecutor` Constructor Parameters.
+### Q4. Deep Dive: `ThreadPoolExecutor` Constructor Parameters & Rejection Policies.
 **Answer:**
 
 ```java
@@ -102,11 +191,10 @@ public ThreadPoolExecutor(
 
 ---
 
-### Q3. How do you calculate optimal Thread Pool Size?
+### Q5. How do you calculate optimal Thread Pool Size?
 **Answer:**
 - **For CPU-Bound Tasks (Encryption, JSON serialization, Image parsing)**:
   $$\text{Pool Size} = N_{\text{CPU}} + 1$$
-  *(Where $N_{\text{CPU}} = \text{Runtime.getRuntime().availableProcessors()}$. The $+1$ accommodates occasional page faults).*
 - **For I/O-Bound Tasks (Database queries, REST API calls, S3 file uploads)**:
   $$\text{Pool Size} = N_{\text{CPU}} \times \left(1 + \frac{\text{Wait Time}}{\text{Service Time}}\right)$$
   *Example: If a request spends 90ms waiting for DB (Wait Time) and 10ms processing CPU (Service Time) on an 8-core CPU:*
@@ -114,49 +202,4 @@ public ThreadPoolExecutor(
 
 ---
 
-## 3. Asynchronous Pipelines with `CompletableFuture`
-
-### Q4. How do you compose asynchronous pipelines using `CompletableFuture`?
-**Answer:**
-
-```java
-@Service
-public class OrderAggregationService {
-    
-    private final ExecutorService customPool = Executors.newFixedThreadPool(16);
-
-    public CompletableFuture<OrderSummary> aggregateOrderAsync(Long orderId) {
-        // Step 1: Fetch Order details asynchronously
-        CompletableFuture<Order> orderFuture = CompletableFuture.supplyAsync(
-            () -> orderClient.getOrder(orderId), customPool
-        );
-
-        // Step 2: Fetch Payment details asynchronously using result from Order
-        CompletableFuture<Payment> paymentFuture = orderFuture.thenCompose(
-            order -> CompletableFuture.supplyAsync(() -> paymentClient.getPayment(order.paymentId()), customPool)
-        );
-
-        // Step 3: Fetch User Profile asynchronously in parallel
-        CompletableFuture<User> userFuture = orderFuture.thenCompose(
-            order -> CompletableFuture.supplyAsync(() -> userClient.getUser(order.userId()), customPool)
-        );
-
-        // Step 4: Combine all independent async results into final DTO with error fallback
-        return CompletableFuture.allOf(orderFuture, paymentFuture, userFuture)
-            .thenApply(v -> new OrderSummary(
-                orderFuture.join(),
-                paymentFuture.join(),
-                userFuture.join()
-            ))
-            .exceptionally(ex -> {
-                log.error("Order aggregation failed for ID: {}", orderId, ex);
-                return OrderSummary.emptyFallback(orderId);
-            });
-    }
-}
-```
-
----
-
 > **Next Chapter**: [08 Virtual Threads (Project Loom)](08_Virtual_Threads_Loom.md)
-
