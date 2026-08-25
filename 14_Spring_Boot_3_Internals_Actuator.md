@@ -253,4 +253,85 @@ curl -X POST http://localhost:8080/manage/loggers/com.example.service \
 
 ---
 
+## 6. Types of Spring Boot Project Setups, Packaging & Architectural Archetypes
+
+```
++-----------------------------------------------------------------------------------+
+|                        SPRING BOOT PROJECT SETUP TAXONOMY                         |
++-----------------------------------------------------------------------------------+
+|  1. Initialization Modes  -> Spring Initializr (Web/CLI/IDE), Maven Archetype    |
+|  2. Packaging Formats     -> Executable JAR, Legacy WAR, GraalVM AOT Native, OCI  |
+|  3. Layout Archetypes     -> Package-by-Layer, Package-by-Feature, Hexagonal,     |
+|                              Multi-Module Clean Architecture, Spring Modulith     |
++-----------------------------------------------------------------------------------+
+```
+
+### Q8. Detail the 4 Deployment Packaging Types in Spring Boot.
+**Answer:**
+
+| Packaging Type | Target Runtime | Build Mechanism | Key Characteristics |
+| :--- | :--- | :--- | :--- |
+| **Executable Standalone JAR (Default)** | JVM on Docker / Linux VM | `spring-boot-maven-plugin:repackage` | Bundles embedded server (Tomcat/Undertow) and classes into an executable archive executed via `JarLauncher`. |
+| **Traditional Deployable WAR** | External Application Server (Tomcat 10+, WildFly) | `<packaging>war</packaging>` + `SpringBootServletInitializer` | Extends `SpringBootServletInitializer` to bind the Spring context to an external servlet container. |
+| **GraalVM Native Image (AOT)** | Serverless (AWS Lambda, Google Cloud Run) | `native-maven-plugin` (Ahead-Of-Time compilation) | Compiles Java into native OS machine binary. Instant cold startup ($<50\text{ms}$) and tiny memory footprint ($<50\text{MB}$). |
+| **Cloud-Native OCI Image (Buildpacks)**| Kubernetes / Container Registries | `mvn spring-boot:build-image` | Creates an optimal, layered Docker/OCI container directly without writing a custom `Dockerfile`! |
+
+#### Converting Spring Boot to a Deployable WAR:
+```java
+@SpringBootApplication
+public class Application extends SpringBootServletInitializer {
+    @Override
+    protected SpringApplicationBuilder configure(SpringApplicationBuilder builder) {
+        return builder.sources(Application.class);
+    }
+    public static void main(String[] args) {
+        SpringApplication.run(Application.class, args);
+    }
+}
+```
+
+---
+
+### Q9. Compare the 4 Common Project Structure Layout Archetypes.
+**Answer:**
+
+#### Archetype 1: Package-by-Layer (Classic 3-Tier - Good for small CRUD apps)
+```
+ com.example.app/
+ ├── controller/    (OrderController, UserController)
+ ├── service/       (OrderService, UserService)
+ ├── repository/    (OrderRepository, UserRepository)
+ ├── entity/        (Order, User)
+ └── dto/           (OrderRequest, OrderResponse)
+```
+- *Limitation*: As the project grows, layers become bloated; changes to a single feature require touching multiple distant directories.
+
+#### Archetype 2: Package-by-Feature (Domain-Oriented Monolith - Good for medium projects)
+```
+ com.example.app/
+ ├── order/         (OrderController, OrderService, OrderRepository, OrderEntity)
+ ├── payment/       (PaymentController, PaymentService, PaymentRepository)
+ └── user/          (UserController, UserService, UserRepository)
+```
+- *Advantage*: High cohesion within a domain; entire feature can be moved or refactored independently.
+
+#### Archetype 3: Hexagonal Architecture / Ports & Adapters (Clean Architecture - Enterprise)
+```
+ com.example.app/
+ ├── domain/            <-- Pure Java POJOs & business rules (ZERO framework imports!)
+ │   └── model/ (Order, OrderId)
+ ├── application/       <-- Use cases & Ports (Interfaces)
+ │   ├── port/in/   (CreateOrderUseCase)
+ │   └── port/out/  (SaveOrderPort, PaymentGatewayPort)
+ └── infrastructure/    <-- Adapters implementing ports (Spring Boot, JPA, REST)
+     ├── adapter/in/web/       (OrderRestController implements CreateOrderUseCase)
+     └── adapter/out/database/ (JpaOrderRepositoryAdapter implements SaveOrderPort)
+```
+- *Advantage*: Core business domain is 100% decoupled from Spring, JPA, and web frameworks, allowing effortless testing and database swapping.
+
+#### Archetype 4: Multi-Module Enterprise Maven Project
+- Separates domain, persistence, business logic, and API gateways into physical, independent build modules with strict dependency boundaries (detailed in [Module 34](34_Build_Tools_CI_CD_DevOps.md)).
+
+---
+
 > **Next Chapter**: [15 Web, REST & Reactive APIs (Spring WebFlux)](15_Spring_Web_REST_APIs.md)
