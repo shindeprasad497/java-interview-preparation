@@ -300,9 +300,87 @@ If an exception occurs inside the `try` block AND another exception occurs while
 
 ---
 
+### Q13. How does Exception Propagation work in the JVM (Call Stack Unwinding & Thread Boundaries)?
+**Answer:**
+
+```
++-----------------------------------------------------------------------------------+
+|                        JVM CALL STACK UNWINDING MECHANISM                         |
++-----------------------------------------------------------------------------------+
+|  [ Thread Call Stack ]                                                            |
+|                                                                                   |
+|  Frame 3: processOrder()   ---> Throws PaymentException!                          |
+|                                 (No catch block -> Stack Frame 3 POPPED / Unwound) |
+|                                       |                                           |
+|  Frame 2: checkoutService()---> (No catch block -> Stack Frame 2 POPPED / Unwound) |
+|                                       |                                           |
+|  Frame 1: orderController()---> +---------------------------------------------+   |
+|                                 | try { checkout(); } catch(PaymentException)|   |
+|                                 +---------------------------------------------+   |
+|                                 (MATCH FOUND! Exception Handled, Stack stops!)   |
++-----------------------------------------------------------------------------------+
+```
+
+1. **Call Stack Unwinding**: When an exception is thrown, the JVM pauses normal execution and searches the current method frame for a matching `catch` block. If none is found, the current stack frame is **popped/unwound**, and the exception propagates to the calling method. This repeats until a matching handler is found or the main thread stack is exhausted, terminating the thread.
+2. **Thread Boundaries Hazard**:
+   - **Exceptions do NOT cross thread boundaries automatically!**
+   - If Thread A spawns Thread B, an uncaught exception in Thread B terminates Thread B silently without Thread A knowing.
+   - *Fixes*:
+     - Use `thread.setUncaughtExceptionHandler(...)`.
+     - Use `Future.get()` (rethrows execution failure as `ExecutionException`).
+     - Use `CompletableFuture.exceptionally()` or `.handle()`.
+
+---
+
+### Q14. How do you design an Enterprise Custom Exception Hierarchy?
+**Answer:**
+
+```java
+// 1. Base Abstract Domain Exception (Unchecked RuntimeException)
+public abstract class BaseDomainException extends RuntimeException {
+    private final String errorCode;
+    private final HttpStatus httpStatus;
+    private final Instant timestamp;
+
+    protected BaseDomainException(String message, String errorCode, HttpStatus httpStatus) {
+        super(message);
+        this.errorCode = errorCode;
+        this.httpStatus = httpStatus;
+        this.timestamp = Instant.now();
+    }
+
+    public String getErrorCode() { return errorCode; }
+    public HttpStatus getHttpStatus() { return httpStatus; }
+    public Instant getTimestamp() { return timestamp; }
+}
+
+// 2. Concrete Sub-Exceptions with Specific Semantics
+public class ResourceNotFoundException extends BaseDomainException {
+    public ResourceNotFoundException(String resourceName, Object identifier) {
+        super(String.format("%s with ID '%s' not found", resourceName, identifier),
+              "ERR_NOT_FOUND", HttpStatus.NOT_FOUND);
+    }
+}
+
+public class BusinessValidationException extends BaseDomainException {
+    public BusinessValidationException(String message) {
+        super(message, "ERR_BUSINESS_VALIDATION", HttpStatus.UNPROCESSABLE_ENTITY);
+    }
+}
+
+public class InsufficientFundsException extends BaseDomainException {
+    public InsufficientFundsException(Long accountId, double required, double available) {
+        super(String.format("Account %d has insufficient funds: required $%.2f, available $%.2f", accountId, required, available),
+              "ERR_INSUFFICIENT_FUNDS", HttpStatus.BAD_REQUEST);
+    }
+}
+```
+
+---
+
 ## 7. Senior Interview Gotchas & Edge Cases
 
-### Q13. Can a `finally` block fail to execute?
+### Q15. Can a `finally` block fail to execute?
 **Answer:**
 Yes, in four specific scenarios:
 1. `System.exit(0)` is invoked before the `finally` block is entered.
@@ -312,7 +390,7 @@ Yes, in four specific scenarios:
 
 ---
 
-### Q14. What happens if both `try` and `finally` have `return` statements?
+### Q16. What happens if both `try` and `finally` have `return` statements?
 **Answer:**
 The `return` statement in the `finally` block **silently overrides and swallows** any `return` statement or uncaught exception from the `try` or `catch` block!
 

@@ -247,5 +247,107 @@ public class LRUCache<K, V> extends LinkedHashMap<K, V> {
 
 ---
 
+## 8. Complete Collections Decision Matrix: When to Use What?
+
+```
++----------------------------------------------------------------------------------------------------+
+|                                MASTER COLLECTIONS SELECTION MATRIX                                 |
++----------------------------------------------------------------------------------------------------+
+| Scenario / Requirement                    | Recommended Collection         | Key Rationale         |
+| ----------------------------------------- | ------------------------------ | --------------------- |
+| Fast random index access ($O(1)$)         | `ArrayList`                    | Contiguous memory array|
+| Frequent insertions/deletions at HEAD/TAIL| `ArrayDeque` (or `LinkedList`) | Fast pointer updates  |
+| Unique items with $O(1)$ lookup           | `HashSet`                      | Hash table bucketing  |
+| Unique items preserving INSERTION ORDER   | `LinkedHashSet`                | Hash table + D-Linked |
+| Unique items naturally SORTED ($O(\log N)$| `TreeSet`                      | Red-Black balanced tree|
+| Key-Value pairs with $O(1)$ lookup        | `HashMap`                      | Fast array of buckets |
+| Key-Value preserving INSERTION / LRU ORDER| `LinkedHashMap`                | Hash table + D-Linked |
+| Key-Value naturally SORTED by Key         | `TreeMap`                      | Red-Black Tree        |
+| Thread-Safe high-throughput Key-Value map | `ConcurrentHashMap`            | CAS + Striped locks   |
+| High-performance Set of Enum constants    | `EnumSet`                      | Bit Vector / Bitmask  |
+| High-performance Map of Enum keys         | `EnumMap`                      | Compact array index   |
+| Standard LIFO Stack or FIFO Queue         | `ArrayDeque`                    | Circular array buffer |
+| Priority-based retrieval (Min/Max Heap)   | `PriorityQueue`                | Binary Heap ($O(\log N)$|
+| Thread-Safe Bounded Task Queue            | `ArrayBlockingQueue`           | Lock + Conditions     |
+| Timed delayed task scheduling             | `DelayQueue`                   | Heap + Priority delay |
+| Zero-capacity direct handoff queue        | `SynchronousQueue`             | Rendezvous channel    |
++----------------------------------------------------------------------------------------------------+
+```
+
+---
+
+## 9. Comprehensive Element Breakdown & Specialized Collections
+
+### Q6. Detail the specialized and concurrent collection implementations.
+**Answer:**
+
+1. **`EnumSet` & `EnumMap`**:
+   - **`EnumSet`**: Implemented internally as a **Bit Vector** (single `long` bitmask for enums with $\le 64$ elements). Zero object allocation, extremely memory-efficient and faster than `HashSet`.
+   - **`EnumMap`**: Backed by a flat array where the array index is determined by `enum.ordinal()`. Extremely fast $O(1)$ array lookups with zero hashing overhead.
+2. **`WeakHashMap`**:
+   - Keys are stored inside `WeakReference` wrappers.
+   - When a key object has no remaining strong references, the Garbage Collector **automatically evicts the entry** from the map.
+   - *Ideal Use Case*: In-memory metadata caches tied to object lifetimes.
+3. **`IdentityHashMap`**:
+   - Compares keys using **reference equality (`==`)** instead of `.equals()`.
+   - *Ideal Use Case*: Serialization graph traversal, object cloning trees, compiler symbol tables.
+4. **`CopyOnWriteArrayList` / `CopyOnWriteArraySet`**:
+   - Every write operation (`add`, `set`, `remove`) creates a fresh **new copy** of the underlying array.
+   - Reads are 100% lock-free and never throw `ConcurrentModificationException`.
+   - *Ideal Use Case*: Read-heavy, write-rarely event listener lists.
+5. **`ConcurrentSkipListMap` / `ConcurrentSkipListSet`**:
+   - Concurrent, sorted collection backed by a **Skip List** data structure ($O(\log N)$).
+   - Provides lock-free concurrent sorted access, range queries (`subMap`), and navigation.
+
+---
+
+## 10. Coding Patterns & Interview Problems Mapped per Data Structure
+
+```
++----------------------------------------------------------------------------------------------------+
+|                         DATA STRUCTURE TO CODING PATTERN INTERVIEW MAPPING                         |
++----------------------------------------------------------------------------------------------------+
+```
+
+### 1. `HashMap` & `HashSet` (Hash Table Patterns)
+- **Core Pattern**: Fast $O(1)$ lookups, frequency counting, complement mapping, prefix sum caching.
+- **Top Interview Coding Questions**:
+  1. *Two Sum / 3Sum* (Map target complement).
+  2. *Subarray Sum Equals K* (Prefix sum frequency map).
+  3. *Group Anagrams* (Character frequency string as map key).
+  4. *Longest Consecutive Sequence* (Set lookups in $O(N)$).
+
+### 2. `TreeMap` & `TreeSet` (Red-Black Balanced BST Patterns)
+- **Core Pattern**: Dynamic sorted order, range queries (`subSet`), floor/ceiling predecessor/successor lookups.
+- **Top Interview Coding Questions**:
+  1. *Meeting Rooms II* (Chronological event timestamp count using `TreeMap`).
+  2. *My Calendar I / II / III* (Interval overlap booking via `floorKey` / `ceilingKey`).
+  3. *Contains Duplicate III* (`TreeSet.ceiling()` within sliding window).
+
+### 3. `PriorityQueue` (Min-Heap / Max-Heap Patterns)
+- **Core Pattern**: Finding Extremes, Top-K elements, streaming medians, merging sorted streams.
+- **Top Interview Coding Questions**:
+  1. *Top K Frequent Elements* (Min-Heap of size $K$).
+  2. *Find Median from Data Stream* (Two Heaps: Max-Heap for lower half + Min-Heap for upper half).
+  3. *Merge K Sorted Lists* (Min-Heap storing heads of all $K$ lists).
+  4. *Task Scheduler / Reorganize String* (Max-Heap with cooldown queues).
+
+### 4. `ArrayDeque` (Stack, Queue & Monotonic Queue Patterns)
+- **Core Pattern**: LIFO Stack, FIFO Queue, BFS graph traversals, Monotonic decreasing/increasing windows.
+- **Top Interview Coding Questions**:
+  1. *Sliding Window Maximum* (Monotonic decreasing `ArrayDeque` maintaining potential maximums in $O(N)$).
+  2. *Daily Temperatures / Next Greater Element* (Monotonic Stack).
+  3. *Largest Rectangle in Histogram* (Monotonic Stack tracking boundary indices).
+  4. *Binary Tree Level Order Traversal* (BFS queue).
+
+### 5. `LinkedHashMap` (Order-Preserving & Eviction Patterns)
+- **Core Pattern**: Access-order LRU cache, insertion-order deduplication.
+- **Top Interview Coding Questions**:
+  1. *LRU Cache (Least Recently Used)* (`LinkedHashMap.removeEldestEntry`).
+  2. *LFU Cache (Least Frequently Used)* (Frequency map + LinkedHashSet per frequency).
+  3. *First Unique Character in a Stream*.
+
+---
+
 > **Next Chapter**: [04 Modern Java Features (Java 8 to 21 LTS)](04_Modern_Java_Features_8_to_21.md)
 
