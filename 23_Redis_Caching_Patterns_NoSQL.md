@@ -1,11 +1,11 @@
-# 23. Redis Caching Patterns, Cache Failures & NoSQL Modeling
+# 23. Redis Caching Patterns, Spring Cache Abstraction & NoSQL Modeling
 
 > **Navigation**: [Master Index](README.md) | [Previous: Database Migrations](22_Database_Migrations_Flyway_Liquibase.md) | [Next: Apache Kafka Engineering](24_Apache_Kafka_Production_Engineering.md)
 
 ---
 
 ## 📌 Chapter Overview
-This module explores **Distributed Caching Strategies** (Cache-Aside, Write-Through, Near-Cache), the 3 major caching failure modes (**Penetration, Breakdown / Thundering Herd, Avalanche**), Redis data structure use cases, and **NoSQL database modeling**.
+This module explores **Distributed Caching Strategies** (Cache-Aside, Write-Through, Near-Cache), the 3 major caching failure modes (**Penetration, Breakdown / Thundering Herd, Avalanche**), the **Spring Cache Abstraction (`@Cacheable`, `@CacheEvict`, `@CachePut`) vs. Hibernate 2nd-Level Cache**, Redis data structures, and **NoSQL modeling**.
 
 ---
 
@@ -36,7 +36,71 @@ This module explores **Distributed Caching Strategies** (Cache-Aside, Write-Thro
 
 ---
 
-## 2. The 3 Major Cache Failure Modes & Production Solutions
+## 2. Spring Cache Abstraction (`@Cacheable`, `@CachePut`, `@CacheEvict`)
+
+```
++-----------------------------------------------------------------------------------+
+|               SPRING CACHE ABSTRACTION VS. HIBERNATE 2ND-LEVEL CACHE              |
++-----------------------------------------------------------------------------------+
+|  Feature              | Spring Cache Abstraction          | Hibernate 2nd-Level Cache |
+|  -------------------- | --------------------------------- | ------------------------- |
+|  **Layer**            | **Service / Method Level**        | **ORM / Entity Level**    |
+|  **Trigger**          | Method execution interception     | `em.find()`, JPQL queries |
+|  **Cached Data**      | Arbitrary DTOs, Lists, Objects    | Entity state tuples (rows)|
+|  **Key**              | Custom SpEL (`#id`, `#user.email`)| Primary Key (`@Id`)        |
+|  **Implementation**   | Spring AOP Proxy                  | Hibernate SessionFactory  |
++-----------------------------------------------------------------------------------+
+```
+
+### Q2. How do `@Cacheable`, `@CachePut`, and `@CacheEvict` work with Spring AOP?
+**Answer:**
+
+```java
+@Service
+@CacheConfig(cacheNames = "users") // Sets default cache name for the class
+public class UserService {
+
+    private final UserRepository userRepository;
+
+    public UserService(UserRepository repo) { this.userRepository = repo; }
+
+    // 1. @Cacheable: Checks cache first. If found, returns cached object without executing method!
+    @Cacheable(key = "#id", unless = "#result == null", condition = "#id > 0")
+    public UserDto getUserById(Long id) {
+        return userRepository.findById(id)
+            .map(UserDto::fromEntity)
+            .orElse(null);
+    }
+
+    // 2. @CachePut: Always executes the method AND updates the cache entry with the return value!
+    @CachePut(key = "#result.id")
+    public UserDto updateUser(UpdateUserRequest req) {
+        User updated = userRepository.save(new User(req));
+        return UserDto.fromEntity(updated);
+    }
+
+    // 3. @CacheEvict: Removes matching key(s) from cache after database deletion
+    @CacheEvict(key = "#id")
+    public void deleteUser(Long id) {
+        userRepository.deleteById(id);
+    }
+
+    // 4. @Caching: Combines multiple cache operations simultaneously
+    @Caching(
+        evict = {
+            @CacheEvict(key = "#user.id"),
+            @CacheEvict(value = "userSummaries", allEntries = true) // Clears entire summary cache!
+        }
+    )
+    public void deactivateUser(User user) {
+        userRepository.deactivate(user.getId());
+    }
+}
+```
+
+---
+
+## 3. The 3 Major Cache Failure Modes & Production Solutions
 
 ```
 +-------------------------------------------------------------------------------+
@@ -48,7 +112,7 @@ This module explores **Distributed Caching Strategies** (Cache-Aside, Write-Thro
 +-------------------------------------------------------------------------------+
 ```
 
-### Q2. How do you resolve Cache Penetration, Breakdown, and Avalanche?
+### Q3. How do you resolve Cache Penetration, Breakdown, and Avalanche?
 **Answer:**
 
 #### 1. Cache Penetration:
@@ -90,7 +154,7 @@ public Product getProduct(Long id) {
 
 ---
 
-## 3. Redis Advanced Data Structures
+## 4. Redis Advanced Data Structures
 
 | Data Structure | Operations | Typical Production Use Case |
 | :--- | :--- | :--- |
@@ -103,9 +167,9 @@ public Product getProduct(Long id) {
 
 ---
 
-## 4. NoSQL Data Modeling: Cassandra vs. MongoDB
+## 5. NoSQL Data Modeling: Cassandra vs. MongoDB
 
-### Q3. How does Cassandra Query-Driven Data Modeling work?
+### Q4. How does Cassandra Query-Driven Data Modeling work?
 **Answer:**
 In RDBMS, you design normalized tables first and write queries later. In **Apache Cassandra**, you **design tables specifically around queries**:
 - **Partition Key**: Determines which cluster node stores the data via consistent hashing.
@@ -115,4 +179,3 @@ In RDBMS, you design normalized tables first and write queries later. In **Apach
 ---
 
 > **Next Chapter**: [24 Apache Kafka Production Engineering & Streaming](24_Apache_Kafka_Production_Engineering.md)
-
