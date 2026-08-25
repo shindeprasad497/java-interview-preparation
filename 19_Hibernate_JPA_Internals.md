@@ -1,15 +1,101 @@
-# 19. Hibernate & Spring Data JPA Internals, Lifecycle & Entity Relationships
+# 19. Hibernate & Spring Data JPA Internals, Caching & Entity Relationships
 
 > **Navigation**: [Master Index](README.md) | [Previous: Spring Modulith](18_Spring_Modulith_Events.md) | [Next: Database Internals & SQL Tuning](20_Database_Internals_SQL_Tuning.md)
 
 ---
 
 ## 📌 Chapter Overview
-This module explores **Hibernate / Spring Data JPA internals**, the 4 Entity Lifecycle states, EntityManager operations (`persist`, `merge`, `detach`, `remove`), **FetchType.LAZY vs. EAGER**, **Entity Relationships (Aggregation vs. Composition)**, resolving **`LazyInitializationException`**, and the **3 production fixes for the N+1 Query Problem**.
+This module explores **Hibernate / Spring Data JPA internals**, Entity Lifecycle states, EntityManager operations, **1st Level Cache vs. 2nd Level Cache (L2 Cache Architecture)**, **FetchType.LAZY vs. EAGER**, **Entity Relationships (Aggregation vs. Composition)**, resolving **`LazyInitializationException`**, and the **3 production fixes for the N+1 Query Problem**.
 
 ---
 
-## 1. Hibernate Entity Lifecycle States & EntityManager Operations
+## 1. Hibernate 1st-Level Cache vs. 2nd-Level Cache (L2 Cache)
+
+```
++-----------------------------------------------------------------------------------+
+|                        HIBERNATE CACHING ARCHITECTURE                             |
++-----------------------------------------------------------------------------------+
+|                                                                                   |
+|  [ Thread / HTTP Request 1 ]                     [ Thread / HTTP Request 2 ]      |
+|               |                                               |                   |
+|               v                                               v                   |
+|  +-------------------------+                     +-------------------------+      |
+|  | 1st-LEVEL CACHE         |                     | 1st-LEVEL CACHE         |      |
+|  | (EntityManager/Session) |                     | (EntityManager/Session) |      |
+|  | - Scope: Transaction    |                     | - Scope: Transaction    |      |
+|  | - Mandatory (Always ON) |                     | - Mandatory (Always ON) |      |
+|  +-------------------------+                     +-------------------------+      |
+|               \                                               /                   |
+|                \                                             /                    |
+|                 v                                           v                     |
+|  +-----------------------------------------------------------------------------+  |
+|  |                     2nd-LEVEL CACHE (L2 CACHE)                              |  |
+|  |  (SessionFactory / Cluster Wide: Redis / Redisson / Ehcache / Hazelcast)    |  |
+|  |  - Scope: Entire JVM / Distributed Cluster across all Sessions              |  |
+|  |  - Optional (Disabled by default)                                           |  |
+|  |  - Stores hydrated entity state tuples (id -> [attr1, attr2, ...])          |  |
+|  +-----------------------------------------------------------------------------+  |
+|                                       |                                           |
+|                                       v                                           |
+|                        [ Relational Database (PostgreSQL) ]                       |
++-----------------------------------------------------------------------------------+
+```
+
+### Q1. Deep Dive: Compare 1st-Level Cache vs. 2nd-Level Cache.
+**Answer:**
+
+| Architectural Criteria | 1st-Level Cache (L1) | 2nd-Level Cache (L2) |
+| :--- | :--- | :--- |
+| **Scope** | **Session / `EntityManager`** (Single Thread / Transaction) | **`SessionFactory`** (Shared across all threads & cluster) |
+| **Status by Default** | **Mandatory** (Always ON; cannot be disabled) | **Optional** (Disabled by default) |
+| **Storage Location** | Local JVM heap (inside current `PersistenceContext`) | In-Memory (Ehcache, Caffeine) or **Distributed (Redis, Hazelcast)**|
+| **Data Format** | Live Managed Java Entity Objects | Dehydrated property arrays (tuples) by Primary Key |
+| **Lifecycle** | Destroyed when session/transaction closes | Survives across transactions until evicted/expired by TTL |
+
+---
+
+### Q2. How do you configure Hibernate 2nd-Level Cache with Redis / Ehcache?
+**Answer:**
+
+#### 1. Configuration in `application.yml`:
+```yaml
+spring:
+  jpa:
+    properties:
+      hibernate:
+        cache:
+          use_second_level_cache: true
+          use_query_cache: true                        # Caches results of JPQL queries
+          region:
+            factory_class: org.redisson.hibernate.RedissonRegionFactory # Or EhcacheRegionFactory
+```
+
+#### 2. Entity Annotation (`@Cacheable` + `@Cache`):
+```java
+@Entity
+@Table(name = "products")
+@jakarta.persistence.Cacheable
+@org.hibernate.annotations.Cache(
+    usage = CacheConcurrencyStrategy.READ_WRITE, // Concurrency Strategy
+    region = "productCache"
+)
+public class Product {
+    @Id
+    private Long id;
+    private String name;
+    private BigDecimal price;
+}
+```
+
+#### The 4 Cache Concurrency Strategies:
+1. **`READ_ONLY`**: For immutable reference data (e.g. Countries, Currencies). Throws exception if updated.
+2. **`NONSTRICT_READ_WRITE`**: For read-heavy data that updates rarely and occasional stale reads are acceptable.
+3. **`READ_WRITE`**: Uses soft locks to ensure strong read committed isolation (Standard for transactional data).
+4. **`TRANSACTIONAL`**: Uses JTA transactions for fully ACID distributed caches (e.g. Infinispan).
+
+---
+
+## 2. Hibernate Entity Lifecycle States & EntityManager Operations
 
 ```
                [ New / Transient Entity ]
@@ -31,7 +117,7 @@ This module explores **Hibernate / Spring Data JPA internals**, the 4 Entity Lif
     [ MANAGED ]
 ```
 
-### Q1. Trace the 4 Entity States and compare EntityManager Operations.
+### Q3. Trace the 4 Entity States and compare EntityManager Operations.
 **Answer:**
 
 | Entity State | DB Identifier (`@Id`) | Associated with PersistenceContext? | Database Row Exists? |
@@ -43,18 +129,15 @@ This module explores **Hibernate / Spring Data JPA internals**, the 4 Entity Lif
 
 #### Core `EntityManager` Operations:
 - **`persist(entity)`**: Transitions a Transient entity to Managed.
-- **`merge(entity)`**: Copies state from a Detached entity into a Managed copy and returns the managed instance. *(Note: The original detached object remains detached!)*
+- **`merge(entity)`**: Copies state from a Detached entity into a Managed copy and returns the managed instance.
 - **`detach(entity)`**: Evicts a specific managed entity from the 1st-level cache.
 - **`clear()`**: Evicts all entities from the 1st-level cache.
-- **`flush()`**: Synchronizes the in-memory persistence context with the underlying database by executing all pending INSERT, UPDATE, and DELETE SQL statements.
-- **`refresh(entity)`**: Overwrites the in-memory entity state with the latest database state.
-
-#### Dirty Checking Mechanism:
-Hibernate takes an initial snapshot of every managed entity. During `em.flush()` or transaction commit, it performs dirty checking by comparing the current entity properties against the initial snapshot. If changed, it **automatically issues SQL `UPDATE` statements** without calling `repo.save()`.
+- **`flush()`**: Synchronizes in-memory changes with the database by executing pending SQL statements.
+- **`refresh(entity)`**: Overwrites in-memory entity state with fresh database values.
 
 ---
 
-## 2. FetchType: `LAZY` vs. `EAGER` & Proxy Mechanics
+## 3. FetchType: `LAZY` vs. `EAGER` & Proxy Mechanics
 
 ```
 +-----------------------------------------------------------------------------------+
@@ -69,14 +152,14 @@ Hibernate takes an initial snapshot of every managed entity. During `em.flush()`
 +-----------------------------------------------------------------------------------+
 ```
 
-### Q2. Why is `FetchType.EAGER` dangerous and how do Lazy Proxies work?
+### Q4. Why is `FetchType.EAGER` dangerous and how do Lazy Proxies work?
 **Answer:**
-- **Why EAGER is Dangerous**: `@ManyToOne` and `@OneToOne` default to `EAGER`. If an `Order` has an eager `@ManyToOne Customer`, querying 1,000 orders will instantly trigger 1,000 extra queries to fetch each customer, causing silent production N+1 catastrophes!
+- **Why EAGER is Dangerous**: `@ManyToOne` and `@OneToOne` default to `EAGER`. If an `Order` has an eager `@ManyToOne Customer`, querying 1,000 orders will trigger 1,000 extra queries to fetch each customer, causing silent production N+1 disasters!
 - **How `FetchType.LAZY` Works**: Hibernate replaces the related entity or collection with a **Dynamic ByteBuddy Proxy subclass**. The proxy holds only the foreign key ID. Only when a getter method (e.g., `order.getCustomer().getName()`) is invoked does the proxy initialize and query the database.
 
 ---
 
-## 3. Entity Relationships: Cardinality, Aggregation vs. Composition
+## 4. Entity Relationships: Cardinality, Aggregation vs. Composition
 
 ```
  AGGREGATION (HAS-A: Independent Lifecycles)
@@ -89,7 +172,7 @@ Hibernate takes an initial snapshot of every managed entity. During `em.flush()`
  * Deleting an Order MUST cascade delete all its OrderItems (orphanRemoval = true)!
 ```
 
-### Q3. How do you implement Composition vs. Aggregation in JPA?
+### Q5. How do you implement Composition vs. Aggregation in JPA?
 **Answer:**
 
 #### 1. Composition Pattern (`Order` $\leftrightarrow$ `OrderItem`):
@@ -150,7 +233,7 @@ public class Employee {
 
 ---
 
-## 4. The N+1 Query Problem & 3 Production Fixes
+## 5. The N+1 Query Problem & 3 Production Fixes
 
 ```
  The N+1 Disaster:
@@ -158,7 +241,7 @@ public class Employee {
  Query 2 to 101: SELECT * FROM customer WHERE id = ?; --> 100 Extra Queries!
 ```
 
-### Q4. Detail the 3 Production Fixes for the N+1 Query Problem.
+### Q6. Detail the 3 Production Fixes for the N+1 Query Problem.
 **Answer:**
 
 ```java
@@ -186,9 +269,9 @@ public class Order {
 
 ---
 
-## 5. `LazyInitializationException` & OSIV Anti-Pattern
+## 6. `LazyInitializationException` & OSIV Anti-Pattern
 
-### Q5. What causes `LazyInitializationException` and why is Open Session In View (OSIV) discouraged?
+### Q7. What causes `LazyInitializationException` and why is Open Session In View (OSIV) discouraged?
 **Answer:**
 - **The Cause**: When an uninitialized lazy collection or entity proxy is accessed outside an active Hibernate session (e.g., in Controller or View layer after `@Transactional` service returned).
 - **The Anti-Pattern (OSIV - `spring.jpa.open-in-view=true`)**:

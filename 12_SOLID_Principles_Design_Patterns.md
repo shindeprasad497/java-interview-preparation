@@ -5,32 +5,80 @@
 ---
 
 ## 📌 Chapter Overview
-This module explores the **SOLID design principles** applied to real-world Spring Boot enterprise architectures and maps the classic **Gang of Four (GoF) Design Patterns** directly to Spring Framework implementations.
+This module provides a complete deep dive into **all 5 SOLID Principles** with real-world enterprise Java / Spring Boot code examples and maps the classic **Gang of Four (GoF) Design Patterns** directly to Spring Framework implementations.
 
 ---
 
-## 1. SOLID Principles Applied in Spring Boot
+## 1. The 5 SOLID Principles with Real-World Spring Boot Code Examples
 
 ```
-+-------------------------------------------------------------------------------+
-|                             SOLID DESIGN PRINCIPLES                           |
-+-------------------------------------------------------------------------------+
-|  S - Single Responsibility   -> A class should have only one reason to change |
-|  O - Open / Closed           -> Open for extension, closed for modification   |
-|  L - Liskov Substitution     -> Subtypes must be substitutable for base types |
-|  I - Interface Segregation   -> Clients shouldn't depend on unused methods    |
-|  D - Dependency Inversion    -> Depend on abstractions, not concretions       |
-+-------------------------------------------------------------------------------+
++-----------------------------------------------------------------------------------+
+|                             SOLID DESIGN PRINCIPLES                               |
++-----------------------------------------------------------------------------------+
+|  S - Single Responsibility   -> A class should have one, and only one, reason to change |
+|  O - Open / Closed           -> Open for extension, closed for modification       |
+|  L - Liskov Substitution     -> Subtypes must be substitutable for base types     |
+|  I - Interface Segregation   -> Clients should not depend on interfaces they don't use |
+|  D - Dependency Inversion    -> High-level modules should depend on abstractions  |
++-----------------------------------------------------------------------------------+
 ```
 
-### Q1. How do you implement the Open/Closed Principle (OCP) elegantly in Spring Boot?
-**Answer:**
-**The Problem**: A payment service using `if-else` or `switch` statements violates OCP because adding a new payment provider (e.g., Apple Pay) requires modifying existing, tested code.
+---
 
-**The Solution**: Combine the **Strategy Pattern** with Spring's dependency injection to dynamically route requests without modifying existing classes.
+### 1. Single Responsibility Principle (SRP)
+> *"A class should have only one reason to change, meaning it should have only one job or responsibility."*
 
+#### ❌ Bad Example (SRP Violation - "God Class"):
 ```java
-// Step 1: Strategy Interface
+// ❌ BAD: Handles order processing, payment charging, database saving, and email notifications!
+@Service
+public class OrderService {
+    public void processOrder(Order order) {
+        // 1. Validate order
+        if (order.getItems().isEmpty()) throw new IllegalArgumentException();
+        // 2. Charge payment via Stripe API
+        StripeClient.charge(order.getAmount());
+        // 3. Save to database
+        jdbcTemplate.update("INSERT INTO orders VALUES (...)");
+        // 4. Send confirmation email
+        JavaMailSender.sendEmail(order.getUserEmail(), "Order Confirmed");
+    }
+}
+```
+
+#### ✅ Good Example (Adhering to SRP):
+```java
+// ✅ GOOD: Each service has exactly ONE distinct responsibility!
+@Service
+public class OrderService {
+    private final OrderRepository orderRepository;
+    private final PaymentProcessor paymentProcessor;
+    private final NotificationService notificationService;
+
+    public OrderService(OrderRepository repo, PaymentProcessor payment, NotificationService notify) {
+        this.orderRepository = repo;
+        this.paymentProcessor = payment;
+        this.notificationService = notify;
+    }
+
+    @Transactional
+    public Order createOrder(CreateOrderRequest req) {
+        paymentProcessor.charge(req.amount());
+        Order savedOrder = orderRepository.save(new Order(req));
+        notificationService.sendConfirmation(savedOrder);
+        return savedOrder;
+    }
+}
+```
+
+---
+
+### 2. Open/Closed Principle (OCP)
+> *"Software entities (classes, modules, functions) should be open for extension, but closed for modification."*
+
+#### ✅ Good Example (Spring Strategy Pattern + Factory Map):
+```java
+// Step 1: Extensible Strategy Interface
 public interface PaymentStrategy {
     PaymentProvider getProvider();
     PaymentResponse process(PaymentRequest request);
@@ -40,96 +88,182 @@ public interface PaymentStrategy {
 @Component
 public class StripePaymentStrategy implements PaymentStrategy {
     @Override public PaymentProvider getProvider() { return PaymentProvider.STRIPE; }
-    @Override public PaymentResponse process(PaymentRequest req) { /* Stripe logic */ return new PaymentResponse(); }
+    @Override public PaymentResponse process(PaymentRequest req) { return new PaymentResponse("STRIPE_SUCCESS"); }
 }
 
 @Component
 public class PayPalPaymentStrategy implements PaymentStrategy {
     @Override public PaymentProvider getProvider() { return PaymentProvider.PAYPAL; }
-    @Override public PaymentResponse process(PaymentRequest req) { /* PayPal logic */ return new PaymentResponse(); }
+    @Override public PaymentResponse process(PaymentRequest req) { return new PaymentResponse("PAYPAL_SUCCESS"); }
 }
 
-// Step 3: Payment Factory / Dispatcher (Open for extension, closed for modification!)
+// Step 3: Open for Extension, Closed for Modification Dispatcher
 @Service
-public class PaymentService {
-    private final Map<PaymentProvider, PaymentStrategy> strategies;
+public class PaymentDispatcherService {
+    private final Map<PaymentProvider, PaymentStrategy> strategyMap;
 
-    // Spring automatically injects all PaymentStrategy implementations into a List!
-    public PaymentService(List<PaymentStrategy> strategyList) {
-        this.strategies = strategyList.stream()
+    // Spring auto-injects all strategies into a Map by provider key!
+    public PaymentDispatcherService(List<PaymentStrategy> strategies) {
+        this.strategyMap = strategies.stream()
             .collect(Collectors.toMap(PaymentStrategy::getProvider, Function.identity()));
     }
 
-    public PaymentResponse pay(PaymentRequest request) {
-        PaymentStrategy strategy = strategies.get(request.provider());
+    public PaymentResponse executePayment(PaymentRequest request) {
+        PaymentStrategy strategy = strategyMap.get(request.provider());
         if (strategy == null) {
-            throw new UnsupportedOperationException("Unsupported provider: " + request.provider());
+            throw new IllegalArgumentException("Unsupported payment provider: " + request.provider());
         }
-        return strategy.process(request);
+        return strategy.process(request); // Zero if-else or switch statements!
     }
 }
 ```
-*(To add ApplePay, simply create `ApplePayStrategy` with `@Component`. Zero existing code is modified!)*
+*(Adding ApplePay requires creating a new class `ApplePayStrategy` with `@Component`. Existing classes are never modified!)*
+
+---
+
+### 3. Liskov Substitution Principle (LSP)
+> *"Subtypes must be substitutable for their base types without altering the correctness of the program."*
+
+#### ❌ Bad Example (LSP Violation):
+```java
+// ❌ BAD: ReadOnlyAccount breaks the contract of Account by throwing UnsupportedOperationException
+public class Account {
+    public void deposit(double amount) { /* ... */ }
+    public void withdraw(double amount) { /* ... */ }
+}
+
+public class FixedTermDepositAccount extends Account {
+    @Override
+    public void withdraw(double amount) {
+        // Violates LSP: Client expecting an Account crashes at runtime!
+        throw new UnsupportedOperationException("Withdrawals not allowed on fixed term accounts!");
+    }
+}
+```
+
+#### ✅ Good Example (Adhering to LSP):
+```java
+// ✅ GOOD: Segregate base behavior into valid substitutable abstractions
+public interface Account {
+    double getBalance();
+    void deposit(double amount);
+}
+
+public interface WithdrawableAccount extends Account {
+    void withdraw(double amount);
+}
+
+public class SavingsAccount implements WithdrawableAccount {
+    @Override public void deposit(double amount) { /* ... */ }
+    @Override public void withdraw(double amount) { /* ... */ }
+    @Override public double getBalance() { return 1000.0; }
+}
+
+public class FixedTermDepositAccount implements Account {
+    @Override public void deposit(double amount) { /* ... */ }
+    @Override public double getBalance() { return 5000.0; }
+    // No withdraw() method exists, preserving 100% type safety and substitution!
+}
+```
+
+---
+
+### 4. Interface Segregation Principle (ISP)
+> *"Clients should not be forced to depend upon interfaces that they do not use."*
+
+#### ❌ Bad Example (Fat "Polluted" Interface):
+```java
+// ❌ BAD: Forces all workers to implement unrelated operations
+public interface Worker {
+    void writeCode();
+    void reviewCode();
+    void designArchitecture();
+    void manageDatabase();
+}
+```
+
+#### ✅ Good Example (Role-Specific Segregated Interfaces):
+```java
+// ✅ GOOD: Fine-grained, focused role interfaces
+public interface CodeWriter { void writeCode(); }
+public interface CodeReviewer { void reviewCode(); }
+public interface Architect { void designArchitecture(); }
+public interface DatabaseAdmin { void manageDatabase(); }
+
+// Senior Engineer implements only relevant capabilities:
+public class SeniorSoftwareEngineer implements CodeWriter, CodeReviewer, Architect {
+    @Override public void writeCode() { /* ... */ }
+    @Override public void reviewCode() { /* ... */ }
+    @Override public void designArchitecture() { /* ... */ }
+}
+```
+
+---
+
+### 5. Dependency Inversion Principle (DIP)
+> *"High-level modules should not depend on low-level modules. Both should depend on abstractions (interfaces)."*
+
+#### ❌ Bad Example (DIP Violation):
+```java
+// ❌ BAD: High-level OrderService directly depends on concrete low-level SendGridEmailClient
+public class OrderService {
+    private SendGridEmailClient emailClient = new SendGridEmailClient(); // Hardcoded dependency!
+}
+```
+
+#### ✅ Good Example (Spring Inversion of Control & DIP):
+```java
+// Step 1: High-level abstraction
+public interface NotificationChannel {
+    void send(String recipient, String message);
+}
+
+// Step 2: Low-level concrete implementations
+@Component
+public class SendGridEmailNotification implements NotificationChannel {
+    @Override public void send(String to, String msg) { /* Send via SendGrid */ }
+}
+
+@Component
+public class TwilioSmsNotification implements NotificationChannel {
+    @Override public void send(String to, String msg) { /* Send via Twilio SMS */ }
+}
+
+// Step 3: High-level service depends solely on the abstraction!
+@Service
+public class OrderNotificationService {
+    private final NotificationChannel notificationChannel;
+
+    // Injected via constructor - Decoupled from concrete implementation!
+    public OrderNotificationService(@Qualifier("sendGridEmailNotification") NotificationChannel channel) {
+        this.notificationChannel = channel;
+    }
+}
+```
 
 ---
 
 ## 2. Gang of Four (GoF) Design Patterns in Spring Framework
 
-### Q2. How are GoF Patterns implemented natively across Spring Framework?
-**Answer:**
-
-| Pattern Category | Design Pattern | Spring Framework Implementation |
-| :--- | :--- | :--- |
-| **Creational** | **Factory Method** | `BeanFactory.getBean()`, `FactoryBean<T>` |
-| **Creational** | **Singleton** | Default Spring Bean Scope (`@Scope("singleton")`) |
-| **Creational** | **Builder** | `RestClient.builder()`, `UriComponentsBuilder`, `SecurityFilterChain` |
-| **Structural** | **Proxy** | Spring AOP Dynamic Proxies (`@Transactional`, `@Async`, `@Cacheable`) |
-| **Structural** | **Adapter** | `HandlerAdapter` (Adapts custom controllers to `DispatcherServlet`) |
-| **Structural** | **Decorator** | `HttpHeadResponseDecorator`, `WebSocketHandlerDecorator` |
-| **Behavioral** | **Template Method** | `JdbcTemplate`, `TransactionTemplate`, `RestTemplate`, `JmsTemplate` |
-| **Behavioral** | **Strategy** | `ResourceLoader`, `AuthenticationProvider`, `TaskExecutor` |
-| **Behavioral** | **Observer** | Spring Application Events (`ApplicationEventPublisher`, `@EventListener`) |
-| **Behavioral** | **Chain of Responsibility**| Spring MVC `HandlerInterceptorChain`, `SecurityFilterChain` |
-
----
-
-### Q3. Implement the Chain of Responsibility Pattern for Request Validation.
-**Answer:**
-
-```java
-public interface OrderValidationStep {
-    void validate(OrderRequest request);
-    void setNext(OrderValidationStep next);
-}
-
-public abstract class AbstractValidationStep implements OrderValidationStep {
-    private OrderValidationStep next;
-    @Override public void setNext(OrderValidationStep next) { this.next = next; }
-    protected void checkNext(OrderRequest req) { if (next != null) next.validate(req); }
-}
-
-@Component
-public class InventoryCheckStep extends AbstractValidationStep {
-    @Override
-    public void validate(OrderRequest request) {
-        if (!hasInventory(request.itemId())) throw new ValidationException("Out of stock");
-        checkNext(request);
-    }
-    private boolean hasInventory(Long id) { return true; }
-}
-
-@Component
-public class FraudCheckStep extends AbstractValidationStep {
-    @Override
-    public void validate(OrderRequest request) {
-        if (isFraudulent(request.userId())) throw new ValidationException("Fraud detected");
-        checkNext(request);
-    }
-    private boolean isFraudulent(Long id) { return false; }
-}
+```
++-------------------------------------------------------------------------------+
+|                        GOF DESIGN PATTERNS IN SPRING FRAMEWORK                |
++-------------------------------------------------------------------------------+
+| Category   | Pattern            | Spring Framework Implementation             |
+| ---------- | ------------------ | ------------------------------------------- |
+| Creational | **Factory Method** | `BeanFactory.getBean()`, `FactoryBean<T>`   |
+| Creational | **Singleton**      | Default Spring Bean Scope                   |
+| Creational | **Builder**        | `RestClient.builder()`, `SecurityFilterChain`|
+| Structural | **Proxy**          | Spring AOP Dynamic Proxies (`@Transactional`)|
+| Structural | **Adapter**        | `HandlerAdapter` in Spring MVC              |
+| Structural | **Decorator**      | `WebSocketHandlerDecorator`                 |
+| Behavioral | **Template Method**| `JdbcTemplate`, `TransactionTemplate`       |
+| Behavioral | **Strategy**       | `AuthenticationProvider`, `TaskExecutor`    |
+| Behavioral | **Observer**       | `ApplicationEventPublisher`, `@EventListener`|
+| Behavioral | **Chain of Resp**  | `HandlerInterceptorChain`, `SecurityFilter` |
++-------------------------------------------------------------------------------+
 ```
 
 ---
 
 > **Next Chapter**: [13 Spring Core, IoC Container & AOP Internals](13_Spring_Core_IoC_AOP_Internals.md)
-
